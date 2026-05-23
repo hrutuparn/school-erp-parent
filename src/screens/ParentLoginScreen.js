@@ -16,12 +16,12 @@ import colors from '../components/colors';
 export default function ParentLoginScreen({ onLogin }) {
   const [uniqueId, setUniqueId] = useState('');
   const [phone, setPhone] = useState('');
-  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');        // NEW: parent's name
   const [loading, setLoading] = useState(false);
-  const [step, setStep] = useState(1); // 1: Unique ID, 2: Phone/Password
-  const [studentName, setStudentName] = useState('');
+  const [step, setStep] = useState(1);
+  const [studentData, setStudentData] = useState(null);
 
-  // This would verify the unique ID with database
+  // Step 1: verify unique ID and fetch student
   const handleUniqueIdSubmit = async () => {
     if (!uniqueId || uniqueId.length < 8) {
       Alert.alert('Error', 'Please enter a valid Unique ID');
@@ -30,20 +30,18 @@ export default function ParentLoginScreen({ onLogin }) {
 
     setLoading(true);
     try {
-      // TODO: Check if Unique ID exists in database
       const { data, error } = await supabase
         .from('students')
-        .select('first_name, last_name')
+        .select('id, first_name, last_name, unique_id, teacher_id')
         .eq('unique_id', uniqueId.toUpperCase())
         .single();
 
       if (error || !data) {
         Alert.alert('Error', 'Invalid Unique ID. Please check and try again.');
-        setLoading(false);
         return;
       }
 
-      setStudentName(`${data.first_name} ${data.last_name}`);
+      setStudentData(data);
       setStep(2);
     } catch (error) {
       Alert.alert('Error', 'Something went wrong');
@@ -52,18 +50,75 @@ export default function ParentLoginScreen({ onLogin }) {
     }
   };
 
+  // Step 2: login/register parent and link to student
   const handleLogin = async () => {
-    if (!phone || !password) {
-      Alert.alert('Error', 'Please enter phone and password');
+    if (!phone || phone.length < 10) {
+      Alert.alert('Error', 'Please enter a valid 10-digit phone number');
       return;
     }
 
     setLoading(true);
     try {
-      // TODO: Create parent accounts in database
-      // For now, simulate success
-      Alert.alert('Success', `Welcome! You're connected to ${studentName}`);
-      onLogin();
+      // 1. Find or create parent
+      let parentId;
+      const { data: existingParent, error: fetchError } = await supabase
+        .from('parents')
+        .select('id')
+        .eq('phone', phone)
+        .maybeSingle();
+
+      if (fetchError && fetchError.code !== 'PGRST116') throw fetchError;
+
+      if (existingParent) {
+        parentId = existingParent.id;
+      } else {
+        // Create new parent
+        const parentName = name.trim() || `Parent_${phone.slice(-4)}`;
+        const { data: newParent, error: insertError } = await supabase
+          .from('parents')
+          .insert([{ phone, name: parentName, email: null }])
+          .select()
+          .single();
+
+        if (insertError) throw insertError;
+        parentId = newParent.id;
+      }
+
+      // 2. Link parent to student (if not already linked)
+      const { data: existingLink, error: linkCheckError } = await supabase
+        .from('parent_students')
+        .select('id')
+        .eq('parent_id', parentId)
+        .eq('student_id', studentData.id)
+        .maybeSingle();
+
+      if (linkCheckError && linkCheckError.code !== 'PGRST116') throw linkCheckError;
+
+      if (!existingLink) {
+        const { error: linkError } = await supabase
+          .from('parent_students')
+          .insert([{
+            parent_id: parentId,
+            student_id: studentData.id,
+            unique_id: studentData.unique_id,
+            nickname: studentData.first_name,
+            is_active: true
+          }]);
+
+        if (linkError) throw linkError;
+      }
+
+      // 3. Also ensure the student has a teacher_id (if missing)
+      if (!studentData.teacher_id) {
+        // Optionally assign a default teacher (e.g., teacher_id = 1)
+        await supabase
+          .from('students')
+          .update({ teacher_id: '1' })
+          .eq('id', studentData.id);
+      }
+
+      Alert.alert('Success', `Welcome! You are now connected to ${studentData.first_name} ${studentData.last_name}`);
+      onLogin({ id: parentId, phone, name: existingParent?.name || name });
     } catch (error) {
       Alert.alert('Error', error.message);
     } finally {
@@ -71,6 +126,7 @@ export default function ParentLoginScreen({ onLogin }) {
     }
   };
 
+  // ---- Step 1 UI (Unique ID) ----
   if (step === 1) {
     return (
       <KeyboardAvoidingView
@@ -120,6 +176,7 @@ export default function ParentLoginScreen({ onLogin }) {
     );
   }
 
+  // ---- Step 2 UI (Phone & Name) ----
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -127,47 +184,40 @@ export default function ParentLoginScreen({ onLogin }) {
     >
       <ScrollView contentContainerStyle={styles.scrollContainer}>
         <View style={styles.innerContainer}>
-          <TouchableOpacity 
-            onPress={() => setStep(1)} 
-            style={styles.backButton}
-          >
+          <TouchableOpacity onPress={() => setStep(1)} style={styles.backButton}>
             <Text style={styles.backText}>← Back</Text>
           </TouchableOpacity>
 
           <View style={styles.logoContainer}>
             <Text style={styles.logoEmoji}>👪</Text>
             <Text style={styles.logoText}>Welcome, Parent!</Text>
-            <Text style={styles.logoSubtext}>Connected to: {studentName}</Text>
+            <Text style={styles.logoSubtext}>
+              Connecting to: {studentData?.first_name} {studentData?.last_name}
+            </Text>
           </View>
 
-          <Text style={styles.welcomeText}>Login or Register</Text>
+          <Text style={styles.welcomeText}>Enter Your Details</Text>
           <Text style={styles.subText}>
-            Create an account to view your child's progress
+            We'll create an account using your phone number
           </Text>
 
           <View style={styles.inputContainer}>
             <TextInput
               style={styles.input}
-              placeholder="Phone Number"
+              placeholder="Your Name (optional)"
+              value={name}
+              onChangeText={setName}
+              placeholderTextColor={colors.gray}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="Phone Number (10 digits)*"
               value={phone}
               onChangeText={setPhone}
               keyboardType="phone-pad"
               maxLength={10}
               placeholderTextColor={colors.gray}
             />
-            
-            <TextInput
-              style={styles.input}
-              placeholder="Password"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-              placeholderTextColor={colors.gray}
-            />
-
-            <TouchableOpacity style={styles.forgotPassword}>
-              <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
-            </TouchableOpacity>
           </View>
 
           <TouchableOpacity
@@ -176,13 +226,7 @@ export default function ParentLoginScreen({ onLogin }) {
             disabled={loading}
           >
             <Text style={styles.authButtonText}>
-              {loading ? 'Please wait...' : 'LOGIN'}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.registerButton}>
-            <Text style={styles.registerText}>
-              New user? <Text style={styles.registerHighlight}>Create Account</Text>
+              {loading ? 'Connecting...' : 'Connect to Child'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -300,24 +344,5 @@ const styles = StyleSheet.create({
     color: colors.gray,
     fontSize: 12,
     marginTop: 15,
-  },
-  forgotPassword: {
-    alignItems: 'flex-end',
-    marginBottom: 10,
-  },
-  forgotPasswordText: {
-    color: colors.teal,
-    fontSize: 14,
-  },
-  registerButton: {
-    alignItems: 'center',
-  },
-  registerText: {
-    fontSize: 14,
-    color: colors.text,
-  },
-  registerHighlight: {
-    color: colors.orange,
-    fontWeight: 'bold',
   },
 });

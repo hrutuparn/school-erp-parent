@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -6,20 +6,116 @@ import {
   ScrollView,
   TouchableOpacity,
   SafeAreaView,
-  Alert
+  Alert,
+  FlatList,
+  Modal
 } from 'react-native';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
+import { supabase } from '../services/supabase';
 import colors from '../components/colors';
 
-export default function ParentDashboard({ onLogout, studentName = "Priya Patel" }) {
-  const [currentTime, setCurrentTime] = useState('Evening');
+export default function ParentDashboard({
+  onLogout,
+  parentId,
+  setParentId,
+  setChatTeacherId,
+  setChatStudentName,
+  setCurrentScreen
+}) {
+  const [currentTime, setCurrentTime] = useState('');
+  const [children, setChildren] = useState([]);
+  const [selectedChild, setSelectedChild] = useState(null);
+  const [showChildPicker, setShowChildPicker] = useState(false);
+  const [attendancePercent, setAttendancePercent] = useState(0);
+  const [averageMarks, setAverageMarks] = useState(0);
 
+  // Set greeting time
+  useEffect(() => {
+    const hours = new Date().getHours();
+    if (hours < 12) setCurrentTime('Morning');
+    else if (hours < 17) setCurrentTime('Afternoon');
+    else setCurrentTime('Evening');
+  }, []);
+
+  // Fetch children for this parent
+  useEffect(() => {
+    if (parentId) {
+      fetchChildren();
+    }
+  }, [parentId]);
+
+  const fetchChildren = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('parent_students')
+        .select(`
+          student_id,
+          nickname,
+          students!inner (
+            id,
+            first_name,
+            last_name,
+            class,
+            roll_number,
+            teacher_id,
+            unique_id
+          )
+        `)
+        .eq('parent_id', parentId);
+
+      if (error) throw error;
+
+      const mapped = data.map(item => ({
+        id: item.students.id,
+        name: item.nickname || `${item.students.first_name} ${item.students.last_name}`,
+        class: item.students.class,
+        roll: item.students.roll_number,
+        teacherId: item.students.teacher_id,
+        uniqueId: item.students.unique_id
+      }));
+      setChildren(mapped);
+      if (mapped.length > 0) {
+        setSelectedChild(mapped[0]);
+        await fetchStats(mapped[0].id);
+      }
+    } catch (error) {
+      console.log('Error fetching children:', error);
+    }
+  };
+
+  const fetchStats = async (studentId) => {
+    // Placeholder: replace with actual attendance and marks queries
+    setAttendancePercent(92);
+    setAverageMarks(78);
+  };
+
+  const handleChildSelect = (child) => {
+    setSelectedChild(child);
+    setShowChildPicker(false);
+    fetchStats(child.id);
+  };
+
+  const handleChatPress = () => {
+    if (!selectedChild) {
+      Alert.alert('No child selected', 'Please select a child first');
+      return;
+    }
+    if (!selectedChild.teacherId) {
+      Alert.alert('No teacher assigned', 'This child does not have a teacher yet');
+      return;
+    }
+    setChatTeacherId(selectedChild.teacherId);
+    setChatStudentName(selectedChild.name);
+    setCurrentScreen('chat');
+  };
+
+  // Features list – we’ll update the chat button to call handleChatPress
   const features = [
     {
       emoji: '✅',
       title: 'Attendance',
       color: colors.green,
-      onPress: () => Alert.alert('Attendance', 'Coming soon!')
+      onPress: () => Alert.alert('Attendance', `${attendancePercent}% attendance`)
     },
     {
       emoji: '📝',
@@ -31,7 +127,7 @@ export default function ParentDashboard({ onLogout, studentName = "Priya Patel" 
       emoji: '📊',
       title: 'Results',
       color: colors.purple,
-      onPress: () => Alert.alert('Results', 'Coming soon!')
+      onPress: () => Alert.alert('Results', `Average: ${averageMarks}%`)
     },
     {
       emoji: '💰',
@@ -55,7 +151,7 @@ export default function ParentDashboard({ onLogout, studentName = "Priya Patel" 
       emoji: '💬',
       title: 'Chat Teacher',
       color: colors.green,
-      onPress: () => Alert.alert('Chat', 'Coming soon!')
+      onPress: handleChatPress   // <- now calls the real function
     },
     {
       emoji: '📋',
@@ -65,10 +161,32 @@ export default function ParentDashboard({ onLogout, studentName = "Priya Patel" 
     }
   ];
 
+  // If no children yet
+  if (children.length === 0) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.greeting}>Good {currentTime},</Text>
+            <Text style={styles.parentName}>Parent 👪</Text>
+          </View>
+          <TouchableOpacity onPress={onLogout} style={styles.logoutButton}>
+            <Text style={styles.logoutText}>🚪</Text>
+          </TouchableOpacity>
+        </View>
+        <View style={styles.emptyContainer}>
+          <Text style={styles.emptyEmoji}>👧🧒</Text>
+          <Text style={styles.emptyText}>No children linked</Text>
+          <Text style={styles.emptySubtext}>Please contact your school to add your child.</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <ExpoStatusBar style="dark" />
-      
+
       <View style={styles.header}>
         <View>
           <Text style={styles.greeting}>Good {currentTime},</Text>
@@ -80,27 +198,33 @@ export default function ParentDashboard({ onLogout, studentName = "Priya Patel" 
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false}>
+        {/* Child selector */}
+        <TouchableOpacity style={styles.childSelector} onPress={() => setShowChildPicker(true)}>
+          <Text style={styles.childName}>{selectedChild?.name}</Text>
+          <Text style={styles.dropdownIcon}>▼</Text>
+        </TouchableOpacity>
+
         <View style={styles.studentCard}>
-          <Text style={styles.studentLabel}>Connected to:</Text>
-          <Text style={styles.studentName}>{studentName}</Text>
+          <Text style={styles.studentLabel}>Class & Roll</Text>
+          <Text style={styles.studentClass}>Class {selectedChild?.class} | Roll No. {selectedChild?.roll}</Text>
           <View style={styles.uniqueIdBadge}>
-            <Text style={styles.uniqueIdText}>JOHDOE7X9F</Text>
+            <Text style={styles.uniqueIdText}>{selectedChild?.uniqueId}</Text>
           </View>
         </View>
 
         <View style={styles.statsRow}>
           <View style={[styles.statCard, { backgroundColor: colors.white }]}>
-            <Text style={styles.statNumber}>95%</Text>
+            <Text style={styles.statNumber}>{attendancePercent}%</Text>
             <Text style={styles.statLabel}>Attendance</Text>
           </View>
           <View style={[styles.statCard, { backgroundColor: colors.white }]}>
-            <Text style={styles.statNumber}>85%</Text>
-            <Text style={styles.statLabel}>Average</Text>
+            <Text style={styles.statNumber}>{averageMarks}%</Text>
+            <Text style={styles.statLabel}>Average Marks</Text>
           </View>
         </View>
 
         <Text style={styles.sectionTitle}>Quick Actions</Text>
-        
+
         <View style={styles.featuresGrid}>
           {features.map((feature, index) => (
             <TouchableOpacity
@@ -132,6 +256,34 @@ export default function ParentDashboard({ onLogout, studentName = "Priya Patel" 
           </View>
         </View>
       </ScrollView>
+
+      {/* Child Picker Modal */}
+      <Modal visible={showChildPicker} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Select Child</Text>
+            <FlatList
+              data={children}
+              keyExtractor={(item) => item.id.toString()}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.modalItem}
+                  onPress={() => handleChildSelect(item)}
+                >
+                  <Text style={styles.modalItemName}>{item.name}</Text>
+                  <Text style={styles.modalItemClass}>Class {item.class}</Text>
+                </TouchableOpacity>
+              )}
+            />
+            <TouchableOpacity
+              style={styles.modalCloseButton}
+              onPress={() => setShowChildPicker(false)}
+            >
+              <Text style={styles.modalCloseText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -172,6 +324,28 @@ const styles = StyleSheet.create({
   logoutText: {
     fontSize: 20,
   },
+  childSelector: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: colors.white,
+    marginHorizontal: 20,
+    marginTop: 15,
+    marginBottom: 5,
+    padding: 15,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.lightGray,
+  },
+  childName: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: colors.text,
+  },
+  dropdownIcon: {
+    fontSize: 18,
+    color: colors.gray,
+  },
   studentCard: {
     backgroundColor: colors.white,
     margin: 20,
@@ -189,8 +363,8 @@ const styles = StyleSheet.create({
     color: colors.gray,
     marginBottom: 5,
   },
-  studentName: {
-    fontSize: 24,
+  studentClass: {
+    fontSize: 18,
     fontWeight: 'bold',
     color: colors.text,
     marginBottom: 10,
@@ -204,7 +378,7 @@ const styles = StyleSheet.create({
     borderColor: colors.teal,
   },
   uniqueIdText: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: 'bold',
     color: colors.teal,
     letterSpacing: 1,
@@ -309,5 +483,73 @@ const styles = StyleSheet.create({
   activityTime: {
     fontSize: 10,
     color: colors.gray,
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 40,
+    marginTop: 100,
+  },
+  emptyEmoji: {
+    fontSize: 80,
+    marginBottom: 20,
+  },
+  emptyText: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: colors.text,
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  emptySubtext: {
+    fontSize: 14,
+    color: colors.gray,
+    textAlign: 'center',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: colors.white,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    maxHeight: '70%',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: colors.text,
+    marginBottom: 15,
+    textAlign: 'center',
+  },
+  modalItem: {
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.lightGray,
+  },
+  modalItemName: {
+    fontSize: 16,
+    color: colors.text,
+  },
+  modalItemClass: {
+    fontSize: 12,
+    color: colors.gray,
+    marginTop: 2,
+  },
+  modalCloseButton: {
+    marginTop: 15,
+    paddingVertical: 12,
+    backgroundColor: colors.lightGray,
+    borderRadius: 8,
+  },
+  modalCloseText: {
+    fontSize: 16,
+    color: colors.text,
+    textAlign: 'center',
+    fontWeight: '600',
   },
 });
