@@ -44,7 +44,6 @@ export default function ParentDocumentsScreen({ onBack, studentId, parentId }) {
         .from('document_requests')
         .select('*')
         .eq('student_id', studentId)
-        .eq('parent_id', parentId)
         .order('requested_on', { ascending: false });
 
       if (error) throw error;
@@ -79,7 +78,6 @@ export default function ParentDocumentsScreen({ onBack, studentId, parentId }) {
       const newRequest = {
         school_id: 'SCH_MH_27430012',
         student_id: studentId,
-        parent_id: parentId,
         type: selectedType,
         note: fullNote,
         status: 'pending',

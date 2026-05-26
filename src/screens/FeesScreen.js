@@ -119,7 +119,6 @@ export default function FeesScreen({ onBack, studentId, parentId }) {
         fee_id: selectedFee.fee_id.startsWith('FEE_TEMPLATE') ? 'FEE_' + Math.floor(10000 + Math.random() * 90000) : selectedFee.fee_id,
         school_id: 'SCH_MH_27430012',
         student_id: studentId,
-        parent_id: parentId,
         fee_type: selectedFee.fee_type,
         description: selectedFee.description,
         amount: selectedFee.amount,

@@ -70,33 +70,7 @@ export default function ParentDashboard({
         return;
       }
 
-      // Verify link doesn't already exist
-      const { data: existingLink } = await supabase
-        .from('parent_students')
-        .select('*')
-        .eq('parent_id', parentId)
-        .eq('student_id', student.id)
-        .maybeSingle();
-
-      if (existingLink) {
-        Alert.alert('Already Linked', 'This student is already linked to your parent account.');
-        return;
-      }
-
-      // Insert parent_students link
-      const { error: insertLinkError } = await supabase
-        .from('parent_students')
-        .insert([{
-          parent_id: parentId,
-          student_id: student.id,
-          unique_id: student.unique_id || `ID:${student.id}`,
-          nickname: student.first_name,
-          is_active: true
-        }]);
-
-      if (insertLinkError) throw insertLinkError;
-
-      Alert.alert('Success', `${student.first_name} has been linked to your account successfully!`);
+      Alert.alert('Success', `${student.first_name} is registered under your mobile number and will appear on your dashboard!`);
       setLinkModalVisible(false);
       setLinkFirstName('');
       setLinkClass('');
@@ -121,39 +95,27 @@ export default function ParentDashboard({
 
   // Fetch children for this parent
   useEffect(() => {
-    if (parentId) {
+    if (parentPhone) {
       fetchChildren();
     }
-  }, [parentId]);
+  }, [parentPhone]);
 
   const fetchChildren = async () => {
     try {
       const { data, error } = await supabase
-        .from('parent_students')
-        .select(`
-          student_id,
-          nickname,
-          students!inner (
-            id,
-            first_name,
-            last_name,
-            class,
-            roll_number,
-            teacher_id,
-            unique_id
-          )
-        `)
-        .eq('parent_id', parentId);
+        .from('students')
+        .select('id, first_name, last_name, class, roll_number, teacher_id, unique_id')
+        .eq('parent_phone', parentPhone);
 
       if (error) throw error;
 
-      const mapped = data.map(item => ({
-        id: item.students.id,
-        name: item.nickname || `${item.students.first_name} ${item.students.last_name}`,
-        class: item.students.class,
-        roll: item.students.roll_number,
-        teacherId: item.students.teacher_id,
-        uniqueId: item.students.unique_id
+      const mapped = (data || []).map(item => ({
+        id: item.id,
+        name: `${item.first_name} ${item.last_name}`,
+        class: item.class,
+        roll: item.roll_number,
+        teacherId: item.teacher_id,
+        uniqueId: item.unique_id
       }));
       setChildren(mapped);
       if (mapped.length > 0) {

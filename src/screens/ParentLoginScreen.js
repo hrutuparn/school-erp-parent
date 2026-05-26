@@ -45,90 +45,26 @@ export default function ParentLoginScreen({ onLogin }) {
 
     setLoading(true);
     try {
-      // 1. Check if parent profile exists
-      let parentId;
-      let parentName = '';
-      
-      const { data: existingParent, error: fetchError } = await supabase
-        .from('parents')
-        .select('*')
-        .eq('phone', phone)
-        .maybeSingle();
-
-      if (fetchError) throw fetchError;
-
-      if (existingParent) {
-        parentId = existingParent.id;
-        parentName = existingParent.name;
-      } else {
-        // Query students first to resolve parent's name
-        const { data: matchedStudents } = await supabase
-          .from('students')
-          .select('parent_name')
-          .eq('parent_phone', phone)
-          .limit(1);
-
-        const resolvedName = (matchedStudents && matchedStudents.length > 0 && matchedStudents[0].parent_name)
-          ? matchedStudents[0].parent_name
-          : `Parent_${phone.slice(-4)}`;
-
-        // Create new Parent record
-        const { data: newParent, error: insertError } = await supabase
-          .from('parents')
-          .insert([{ phone, name: resolvedName, email: null }])
-          .select()
-          .single();
-
-        if (insertError) throw insertError;
-        parentId = newParent.id;
-        parentName = newParent.name;
-      }
-
-      // Perform auto student linking (self-healing for both existing and new parents)
+      // Query students first to resolve parent's name
       const { data: matchedStudents, error: studentsError } = await supabase
         .from('students')
-        .select('*')
-        .eq('parent_phone', phone);
+        .select('parent_name')
+        .eq('parent_phone', phone)
+        .limit(1);
 
       if (studentsError) throw studentsError;
 
+      let parentName = '';
       if (matchedStudents && matchedStudents.length > 0) {
-        // Fetch existing links
-        const { data: existingLinks, error: linksError } = await supabase
-          .from('parent_students')
-          .select('student_id')
-          .eq('parent_id', parentId);
-
-        if (!linksError) {
-          const linkedStudentIds = new Set((existingLinks || []).map(l => l.student_id));
-          const linksToInsert = [];
-
-          matchedStudents.forEach(student => {
-            if (!linkedStudentIds.has(student.id)) {
-              linksToInsert.push({
-                parent_id: parentId,
-                student_id: student.id,
-                unique_id: student.unique_id || `ID:${student.id}`,
-                nickname: student.first_name,
-                is_active: true
-              });
-            }
-          });
-
-          if (linksToInsert.length > 0) {
-            const { error: linkError } = await supabase
-              .from('parent_students')
-              .insert(linksToInsert);
-
-            if (linkError) {
-              console.log('Error creating auto parent-student links:', linkError.message);
-            }
-          }
-        }
+        parentName = matchedStudents[0].parent_name || `Parent_${phone.slice(-4)}`;
+      } else {
+        // Allow login but notify
+        parentName = `Parent_${phone.slice(-4)}`;
+        Alert.alert('Registration Note', 'Your mobile number is not registered under any student profile in our system. You can link a child from the dashboard using their Class, Roll Number and Name.');
       }
 
-      Alert.alert('Success', `Welcome back, ${parentName || 'Parent'}!`);
-      onLogin({ id: parentId, phone, name: parentName || 'Parent' });
+      Alert.alert('Success', `Welcome back, ${parentName}!`);
+      onLogin({ id: phone, phone, name: parentName });
     } catch (error) {
       Alert.alert('Database Login Error', error.message);
     } finally {
