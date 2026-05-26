@@ -15,7 +15,7 @@ import {
 import { supabase } from '../services/supabase';
 import colors from '../components/colors';
 
-export default function ParentChatScreen({ onBack, parentId, teacherId, studentName }) {
+export default function ParentChatScreen({ onBack, parentId, teacherId, studentName, title = 'Chat with Teacher' }) {
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [selectedCommand, setSelectedCommand] = useState(null);
@@ -126,7 +126,7 @@ export default function ParentChatScreen({ onBack, parentId, teacherId, studentN
           <Text style={styles.backText}>←</Text>
         </TouchableOpacity>
         <View style={styles.headerInfo}>
-          <Text style={styles.headerTitle}>Chat with Teacher</Text>
+          <Text style={styles.headerTitle}>{title}</Text>
           <Text style={styles.headerSubtitle}>{studentName}</Text>
         </View>
         <View style={{ width: 40 }} />

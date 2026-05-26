@@ -8,7 +8,9 @@ import {
   SafeAreaView,
   Alert,
   FlatList,
-  Modal
+  Modal,
+  TextInput,
+  ActivityIndicator
 } from 'react-native';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 import { supabase } from '../services/supabase';
@@ -17,17 +19,97 @@ import colors from '../components/colors';
 export default function ParentDashboard({
   onLogout,
   parentId,
-  setParentId,
-  setChatTeacherId,
-  setChatStudentName,
+  parentPhone,
+  selectedChild,
+  setSelectedChild,
   setCurrentScreen
 }) {
   const [currentTime, setCurrentTime] = useState('');
   const [children, setChildren] = useState([]);
-  const [selectedChild, setSelectedChild] = useState(null);
   const [showChildPicker, setShowChildPicker] = useState(false);
   const [attendancePercent, setAttendancePercent] = useState(0);
   const [averageMarks, setAverageMarks] = useState(0);
+  const [recentActivities, setRecentActivities] = useState([]);
+
+  // Link Child form states
+  const [linkModalVisible, setLinkModalVisible] = useState(false);
+  const [linkFirstName, setLinkFirstName] = useState('');
+  const [linkClass, setLinkClass] = useState('');
+  const [linkRollNumber, setLinkRollNumber] = useState('');
+  const [linking, setLinking] = useState(false);
+
+  const handleLinkStudent = async () => {
+    if (!linkFirstName.trim() || !linkClass.trim() || !linkRollNumber.trim()) {
+      Alert.alert('Validation Error', 'Please fill in all student details.');
+      return;
+    }
+
+    setLinking(true);
+    try {
+      const { data: student, error } = await supabase
+        .from('students')
+        .select('*')
+        .eq('class', linkClass.trim().toUpperCase())
+        .eq('roll_number', linkRollNumber.trim())
+        .ilike('first_name', `%${linkFirstName.trim()}%`)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (!student) {
+        Alert.alert('Not Found', 'No student found matching these credentials.');
+        return;
+      }
+
+      // VERIFICATION CONSTRAINT: Matches parent's logged in mobile number!
+      if (student.parent_phone !== parentPhone) {
+        Alert.alert(
+          'Security Verification Failed',
+          `Your logged-in mobile number (+91 ${parentPhone}) does not match the parent mobile number (+91 ${student.parent_phone || 'None'}) registered for this student in our database. Please contact school administration to update the records.`
+        );
+        return;
+      }
+
+      // Verify link doesn't already exist
+      const { data: existingLink } = await supabase
+        .from('parent_students')
+        .select('*')
+        .eq('parent_id', parentId)
+        .eq('student_id', student.id)
+        .maybeSingle();
+
+      if (existingLink) {
+        Alert.alert('Already Linked', 'This student is already linked to your parent account.');
+        return;
+      }
+
+      // Insert parent_students link
+      const { error: insertLinkError } = await supabase
+        .from('parent_students')
+        .insert([{
+          parent_id: parentId,
+          student_id: student.id,
+          unique_id: student.unique_id || `ID:${student.id}`,
+          nickname: student.first_name,
+          is_active: true
+        }]);
+
+      if (insertLinkError) throw insertLinkError;
+
+      Alert.alert('Success', `${student.first_name} has been linked to your account successfully!`);
+      setLinkModalVisible(false);
+      setLinkFirstName('');
+      setLinkClass('');
+      setLinkRollNumber('');
+      
+      // Refresh children list
+      await fetchChildren();
+    } catch (e) {
+      Alert.alert('Error', 'Failed to link student: ' + e.message);
+    } finally {
+      setLinking(false);
+    }
+  };
 
   // Set greeting time
   useEffect(() => {
@@ -75,89 +157,194 @@ export default function ParentDashboard({
       }));
       setChildren(mapped);
       if (mapped.length > 0) {
-        setSelectedChild(mapped[0]);
-        await fetchStats(mapped[0].id);
+        // If not already set, set first child
+        if (!selectedChild) {
+          setSelectedChild(mapped[0]);
+          await fetchStats(mapped[0].id, mapped[0].class);
+        } else {
+          const current = mapped.find(c => c.id === selectedChild.id) || mapped[0];
+          setSelectedChild(current);
+          await fetchStats(current.id, current.class);
+        }
       }
     } catch (error) {
       console.log('Error fetching children:', error);
     }
   };
 
-  const fetchStats = async (studentId) => {
-    // Placeholder: replace with actual attendance and marks queries
-    setAttendancePercent(92);
-    setAverageMarks(78);
+  const fetchStats = async (studentId, className) => {
+    try {
+      // 1. Fetch attendance
+      const { data: attData, error: attError } = await supabase
+        .from('student_attendance')
+        .select('status')
+        .eq('student_id', studentId);
+
+      let attPercent = 100;
+      if (!attError && attData && attData.length > 0) {
+        const presentCount = attData.filter(r => r.status === 'present').length;
+        attPercent = Math.round((presentCount / attData.length) * 100);
+      }
+      setAttendancePercent(attPercent);
+
+      // 2. Fetch marks
+      const { data: marksData, error: marksError } = await supabase
+        .from('marks')
+        .select('marks_obtained, max_marks')
+        .eq('student_id', studentId);
+
+      let avgMarks = 0;
+      if (!marksError && marksData && marksData.length > 0) {
+        let totalPercentSum = 0;
+        let count = 0;
+        marksData.forEach(item => {
+          const score = parseFloat(item.marks_obtained);
+          const max = parseFloat(item.max_marks);
+          if (!isNaN(score) && !isNaN(max) && max > 0) {
+            totalPercentSum += (score / max) * 100;
+            count++;
+          }
+        });
+        avgMarks = count > 0 ? Math.round(totalPercentSum / count) : 0;
+      }
+      setAverageMarks(avgMarks);
+
+      // 3. Compile activities list
+      const activitiesList = [];
+
+      // Get last attendance
+      const { data: lastAtt } = await supabase
+        .from('student_attendance')
+        .select('date, status')
+        .eq('student_id', studentId)
+        .order('date', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (lastAtt) {
+        activitiesList.push({
+          id: 'act_att',
+          emoji: lastAtt.status === 'present' ? '🟢' : '🔴',
+          text: `Attendance: Marked ${lastAtt.status}`,
+          time: `Date: ${lastAtt.date}`
+        });
+      } else {
+        activitiesList.push({
+          id: 'act_att_def',
+          emoji: '✅',
+          text: 'Attendance sync successful',
+          time: 'Active'
+        });
+      }
+
+      // Get last homework
+      if (className) {
+        const { data: lastHw } = await supabase
+          .from('homework')
+          .select('subject, chapter_name, assigned_date')
+          .eq('class_name', className)
+          .order('assigned_date', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (lastHw) {
+          activitiesList.push({
+            id: 'act_hw',
+            emoji: '📝',
+            text: `Homework: ${lastHw.subject} - ${lastHw.chapter_name || 'Tasks'}`,
+            time: `Assigned: ${lastHw.assigned_date}`
+          });
+        }
+      }
+
+      // Get last exam result
+      const { data: lastMark } = await supabase
+        .from('marks')
+        .select('subject, test_name, marks_obtained, max_marks')
+        .eq('student_id', studentId)
+        .order('date', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (lastMark) {
+        activitiesList.push({
+          id: 'act_mark',
+          emoji: '📊',
+          text: `${lastMark.subject} graded: ${lastMark.marks_obtained}/${lastMark.max_marks}`,
+          time: lastMark.test_name
+        });
+      }
+
+      if (activitiesList.length < 2) {
+        activitiesList.push({
+          id: 'act_default',
+          emoji: '📅',
+          text: 'Greenwood school calendar synchronized',
+          time: 'Just now'
+        });
+      }
+
+      setRecentActivities(activitiesList);
+    } catch (e) {
+      console.log('Error fetching stats:', e.message);
+    }
   };
 
   const handleChildSelect = (child) => {
     setSelectedChild(child);
     setShowChildPicker(false);
-    fetchStats(child.id);
+    fetchStats(child.id, child.class);
   };
 
-  const handleChatPress = () => {
-    if (!selectedChild) {
-      Alert.alert('No child selected', 'Please select a child first');
-      return;
-    }
-    if (!selectedChild.teacherId) {
-      Alert.alert('No teacher assigned', 'This child does not have a teacher yet');
-      return;
-    }
-    setChatTeacherId(selectedChild.teacherId);
-    setChatStudentName(selectedChild.name);
-    setCurrentScreen('chat');
-  };
-
-  // Features list – we’ll update the chat button to call handleChatPress
+  // Features list linking to the new screen routes
   const features = [
     {
       emoji: '✅',
       title: 'Attendance',
       color: colors.green,
-      onPress: () => Alert.alert('Attendance', `${attendancePercent}% attendance`)
+      onPress: () => setCurrentScreen('attendance')
     },
     {
       emoji: '📝',
       title: 'Homework',
       color: colors.orange,
-      onPress: () => Alert.alert('Homework', 'Coming soon!')
+      onPress: () => setCurrentScreen('homework')
     },
     {
       emoji: '📊',
       title: 'Results',
       color: colors.purple,
-      onPress: () => Alert.alert('Results', `Average: ${averageMarks}%`)
+      onPress: () => setCurrentScreen('results')
     },
     {
       emoji: '💰',
       title: 'Fees',
       color: colors.blue,
-      onPress: () => Alert.alert('Fees', 'Coming soon!')
+      onPress: () => setCurrentScreen('fees')
     },
     {
       emoji: '📅',
       title: 'Events',
       color: colors.teal,
-      onPress: () => Alert.alert('Events', 'Coming soon!')
+      onPress: () => setCurrentScreen('events')
     },
     {
       emoji: '🚌',
       title: 'Bus Tracking',
       color: colors.orange,
-      onPress: () => Alert.alert('Bus Tracking', 'Coming soon!')
+      onPress: () => setCurrentScreen('bus')
     },
     {
       emoji: '💬',
-      title: 'Chat Teacher',
+      title: 'Chat Connect',
       color: colors.green,
-      onPress: handleChatPress   // <- now calls the real function
+      onPress: () => setCurrentScreen('chat_select')
     },
     {
       emoji: '📋',
       title: 'Documents',
       color: colors.purple,
-      onPress: () => Alert.alert('Documents', 'Coming soon!')
+      onPress: () => setCurrentScreen('documents')
     }
   ];
 
@@ -240,20 +427,15 @@ export default function ParentDashboard({
 
         <View style={styles.recentActivity}>
           <Text style={styles.recentTitle}>Recent Activity</Text>
-          <View style={styles.activityItem}>
-            <Text style={styles.activityEmoji}>✅</Text>
-            <View style={styles.activityContent}>
-              <Text style={styles.activityText}>Present today</Text>
-              <Text style={styles.activityTime}>Today, 9:00 AM</Text>
+          {recentActivities.map((act) => (
+            <View key={act.id} style={styles.activityItem}>
+              <Text style={styles.activityEmoji}>{act.emoji}</Text>
+              <View style={styles.activityContent}>
+                <Text style={styles.activityText}>{act.text}</Text>
+                <Text style={styles.activityTime}>{act.time}</Text>
+              </View>
             </View>
-          </View>
-          <View style={styles.activityItem}>
-            <Text style={styles.activityEmoji}>📝</Text>
-            <View style={styles.activityContent}>
-              <Text style={styles.activityText}>Homework: Math Chapter 5</Text>
-              <Text style={styles.activityTime}>Yesterday</Text>
-            </View>
-          </View>
+          ))}
         </View>
       </ScrollView>
 
@@ -274,6 +456,17 @@ export default function ParentDashboard({
                   <Text style={styles.modalItemClass}>Class {item.class}</Text>
                 </TouchableOpacity>
               )}
+              ListFooterComponent={
+                <TouchableOpacity
+                  style={styles.modalItemLinkBtn}
+                  onPress={() => {
+                    setShowChildPicker(false);
+                    setLinkModalVisible(true);
+                  }}
+                >
+                  <Text style={styles.modalItemLinkText}>➕ Link a New Child</Text>
+                </TouchableOpacity>
+              }
             />
             <TouchableOpacity
               style={styles.modalCloseButton}
@@ -281,6 +474,76 @@ export default function ParentDashboard({
             >
               <Text style={styles.modalCloseText}>Cancel</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Link Student Form Modal */}
+      <Modal visible={linkModalVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.linkModalContent}>
+            <View style={styles.linkModalHeader}>
+              <Text style={styles.linkModalTitle}>Link Student to Account</Text>
+              <TouchableOpacity
+                onPress={() => setLinkModalVisible(false)}
+                style={styles.closeBtn}
+              >
+                <Text style={{ fontSize: 20, color: colors.gray }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={styles.linkModalSubtext}>
+                Enter your child's name, class, and roll number. We will link them if they are registered with your phone number (+91 {parentPhone}).
+              </Text>
+
+              <View style={styles.formGroup}>
+                <Text style={styles.inputLabel}>Student First Name</Text>
+                <TextInput
+                  style={styles.textInput}
+                  placeholder="e.g. Shivraj"
+                  placeholderTextColor={colors.gray}
+                  value={linkFirstName}
+                  onChangeText={setLinkFirstName}
+                />
+              </View>
+
+              <View style={styles.formGroup}>
+                <Text style={styles.inputLabel}>Class / Standard</Text>
+                <TextInput
+                  style={styles.textInput}
+                  placeholder="e.g. 1A"
+                  placeholderTextColor={colors.gray}
+                  value={linkClass}
+                  onChangeText={setLinkClass}
+                  autoCapitalize="characters"
+                />
+              </View>
+
+              <View style={styles.formGroup}>
+                <Text style={styles.inputLabel}>Roll Number</Text>
+                <TextInput
+                  style={styles.textInput}
+                  placeholder="e.g. 2"
+                  placeholderTextColor={colors.gray}
+                  value={linkRollNumber}
+                  onChangeText={setLinkRollNumber}
+                  keyboardType="numeric"
+                />
+              </View>
+
+              <TouchableOpacity
+                style={[styles.linkSubmitBtn, { backgroundColor: colors.teal }]}
+                onPress={handleLinkStudent}
+                disabled={linking}
+              >
+                {linking ? (
+                  <ActivityIndicator color={colors.white} />
+                ) : (
+                  <Text style={styles.linkSubmitBtnText}>✓ Search and Link Student</Text>
+                )}
+              </TouchableOpacity>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -551,5 +814,88 @@ const styles = StyleSheet.create({
     color: colors.text,
     textAlign: 'center',
     fontWeight: '600',
+  },
+  modalItemLinkBtn: {
+    paddingVertical: 18,
+    borderTopWidth: 1,
+    borderTopColor: colors.lightGray,
+    alignItems: 'center',
+    marginTop: 10,
+    backgroundColor: colors.background,
+    borderRadius: 8
+  },
+  modalItemLinkText: {
+    color: colors.teal,
+    fontWeight: 'bold',
+    fontSize: 15,
+  },
+  linkModalContent: {
+    backgroundColor: colors.white,
+    borderRadius: 20,
+    padding: 20,
+    width: '90%',
+    maxHeight: '85%',
+    alignSelf: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 5,
+  },
+  linkModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.lightGray,
+    paddingBottom: 10
+  },
+  linkModalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: colors.text,
+  },
+  closeBtn: {
+    width: 30,
+    height: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  linkModalSubtext: {
+    fontSize: 12,
+    color: colors.gray,
+    marginBottom: 20,
+    lineHeight: 18,
+  },
+  formGroup: {
+    marginBottom: 15,
+  },
+  inputLabel: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: colors.text,
+    marginBottom: 6,
+  },
+  textInput: {
+    borderWidth: 1,
+    borderColor: colors.lightGray,
+    backgroundColor: colors.white,
+    padding: 12,
+    borderRadius: 8,
+    fontSize: 14,
+    color: colors.text,
+  },
+  linkSubmitBtn: {
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 10,
+    marginBottom: 20,
+  },
+  linkSubmitBtnText: {
+    color: colors.white,
+    fontSize: 14,
+    fontWeight: 'bold',
   },
 });
