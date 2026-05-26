@@ -568,11 +568,11 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.lightGray,
   },
   greeting: {
-    fontSize: 16,
+    fontSize: 18,
     color: colors.gray,
   },
   parentName: {
-    fontSize: 22,
+    fontSize: 26,
     fontWeight: 'bold',
     color: colors.text,
   },
@@ -601,12 +601,12 @@ const styles = StyleSheet.create({
     borderColor: colors.lightGray,
   },
   childName: {
-    fontSize: 18,
+    fontSize: 22,
     fontWeight: 'bold',
     color: colors.text,
   },
   dropdownIcon: {
-    fontSize: 18,
+    fontSize: 22,
     color: colors.gray,
   },
   studentCard: {
@@ -687,10 +687,10 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   featureCard: {
-    width: '23%',
+    width: '31.3%',
     marginHorizontal: '1%',
     marginBottom: 15,
-    paddingVertical: 15,
+    paddingVertical: 20,
     borderRadius: 12,
     alignItems: 'center',
     shadowColor: '#000',
@@ -700,13 +700,13 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   featureEmoji: {
-    fontSize: 24,
-    marginBottom: 5,
+    fontSize: 32,
+    marginBottom: 8,
   },
   featureTitle: {
-    fontSize: 10,
+    fontSize: 13,
     color: colors.white,
-    fontWeight: '600',
+    fontWeight: 'bold',
     textAlign: 'center',
   },
   recentActivity: {
